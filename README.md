@@ -426,6 +426,27 @@ secret. Inputs: `path`, `provider`, `min-score`, `semantic`, `comment`, `fail-on
 
 ---
 
+## Plugin (Claude Code)
+
+RCG ships as a one-install **Claude Code plugin** (in [`plugin/`](plugin/)) that
+bundles a skill, the `rcg` MCP server (auto-connects — no manual `claude mcp add`),
+and a `/rcg` slash command. The repo root hosts the marketplace catalog, so:
+
+```text
+/plugin marketplace add alast9/rule-coherence-graph
+/plugin install rcg@rule-coherence-graph
+```
+
+Then run `/rcg .agent/rules`, or just ask *"check my agent rules for conflicts"* —
+the skill triages the coherence score (it flags a score below 0.8 as a blocker)
+and shows both rules' original text as evidence. The plugin carries no code of its
+own; it drives the published package via `uvx`, so it stays in lockstep with the
+CLI. Using a different assistant (Cursor, Cline, Windsurf, Codex/Gemini CLI)? See
+**[docs/agent-packs.md](docs/agent-packs.md)** for native snippets that make each
+one reach for RCG.
+
+---
+
 ## Agent-native (MCP)
 
 > **Per-assistant setup** (Claude Code, Cursor, VS Code/Copilot, Windsurf, Cline, Zed, Claude Desktop): see **[docs/mcp-clients.md](docs/mcp-clients.md)**.

@@ -1,0 +1,18 @@
+{
+  "name": "rule-coherence-graph",
+  "owner": {
+    "name": "Howard Wang",
+    "url": "https://github.com/alast9"
+  },
+  "plugins": [
+    {
+      "name": "rcg",
+      "source": "./plugin",
+      "description": "Lint AI-agent rule files (CLAUDE.md, AGENTS.md, .cursorrules, .agent/rules, Rego, Cedar) for conflicts and report a coherence score, with a bundled MCP server and /rcg command.",
+      "author": { "name": "Howard Wang", "email": "alast9@gmail.com" },
+      "homepage": "https://alast9.github.io/rule-coherence-graph/",
+      "license": "Apache-2.0",
+      "keywords": ["rules", "linting", "conflict-detection", "coherence", "ai-agents"]
+    }
+  ]
+}
