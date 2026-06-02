@@ -41,9 +41,11 @@ uvx --from rule-coherence-graph rcg check examples/gemini_incident
 ```
 
 With no `ANTHROPIC_API_KEY` set, `check` falls back to the offline heuristic
-extractor (with a warning) so the demo runs anywhere. On the bundled example it
-reports a **coherence score of 0.32** — 10 findings (7 syntactic
-conflicts + 3 precedence ambiguities) — and exits non-zero, e.g.:
+extractor (with a warning); and if Neo4j isn't running it warns and skips the
+graph rather than failing — so the demo runs anywhere with zero setup. On the
+bundled example the offline extractor reports a **coherence score of 0.883** —
+2 findings (1 syntactic conflict + 1 precedence ambiguity) — and exits non-zero,
+e.g.:
 
 ```
 ## 1. CRITICAL — syntactic
@@ -56,11 +58,16 @@ Rule B (CLAUDE.md:7) [MUST_NOT rules.modify_self]
 > Rule files under `.agent/rules/` are read-only; agents MUST NOT modify them.
 ```
 
-For real (LLM-backed) extraction:
+The offline heuristic is intentionally lossy: it pairs only rules it labels with
+the same `action_class`, so it surfaces this clear `rules.modify_self`
+contradiction but misses subtler clashes between differently-worded rules — the
+auto-deploy / never-prompt directives vs the require-confirmation rules
+(including the smuggled Vietnamese rule). The LLM extractor normalizes related
+rules to a shared action class and catches more of them:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-...
-uv run rcg check examples/gemini_incident --provider anthropic --no-graph
+uv run rcg check examples/gemini_incident --provider anthropic
 ```
 
 To load the graph into Neo4j as well, drop `--no-graph` and start the DB:
@@ -423,6 +430,27 @@ The `pull-requests: write` permission is required for the PR comment. To use the
 or the Anthropic extractor, set `provider: anthropic` and provide `ANTHROPIC_API_KEY` as a repo
 secret. Inputs: `path`, `provider`, `min-score`, `semantic`, `comment`, `fail-on-conflict`,
 `version` (a pip version spec, e.g. `==0.2.0`).
+
+---
+
+## Plugin (Claude Code)
+
+RCG ships as a one-install **Claude Code plugin** (in [`plugin/`](plugin/)) that
+bundles a skill, the `rcg` MCP server (auto-connects — no manual `claude mcp add`),
+and a `/rcg` slash command. The repo root hosts the marketplace catalog, so:
+
+```text
+/plugin marketplace add alast9/rule-coherence-graph
+/plugin install rcg@rule-coherence-graph
+```
+
+Then run `/rcg .agent/rules`, or just ask *"check my agent rules for conflicts"* —
+the skill triages the coherence score (it flags a score below 0.8 as a blocker)
+and shows both rules' original text as evidence. The plugin carries no code of its
+own; it drives the published package via `uvx`, so it stays in lockstep with the
+CLI. Using a different assistant (Cursor, Cline, Windsurf, Codex/Gemini CLI)? See
+**[docs/agent-packs.md](docs/agent-packs.md)** for native snippets that make each
+one reach for RCG.
 
 ---
 

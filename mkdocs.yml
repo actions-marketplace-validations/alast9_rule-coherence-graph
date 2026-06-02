@@ -44,6 +44,7 @@ nav:
   - Quickstart: quickstart.md
   - How it works (concepts): concepts.md
   - Coding assistants (MCP): mcp-clients.md
+  - Agent-native packs: agent-packs.md
   - Benchmark: benchmark.md
   - Design & schema: SPEC.md
   - Releasing: RELEASING.md

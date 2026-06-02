@@ -1,0 +1,17 @@
+{
+  "name": "rcg",
+  "displayName": "Rule Coherence Graph",
+  "version": "0.1.0",
+  "description": "Lint the rule files that govern AI coding agents (CLAUDE.md, AGENTS.md, .cursorrules, .agent/rules, Rego, Cedar) for conflicts, and report a coherence score before the agent acts.",
+  "author": { "name": "Howard Wang", "email": "alast9@gmail.com" },
+  "homepage": "https://alast9.github.io/rule-coherence-graph/",
+  "repository": "https://github.com/alast9/rule-coherence-graph",
+  "license": "Apache-2.0",
+  "keywords": ["rules", "linting", "conflict-detection", "coherence", "ai-agents"],
+  "mcpServers": {
+    "rcg": {
+      "command": "uvx",
+      "args": ["--from", "rule-coherence-graph[mcp]", "rcg-mcp"]
+    }
+  }
+}
