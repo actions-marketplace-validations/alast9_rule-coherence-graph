@@ -37,6 +37,11 @@ class Source(BaseModel):
     section: str | None = None
     original_language: str | None = None
     """BCP-47 tag. None means the extractor judged the rule to be in English."""
+    pack: str | None = None
+    """Pack this rule belongs to (e.g. one installable rule/skill pack). Set by
+    discovery (top path segment under the corpus root) or explicitly by the
+    composition pass. ``None`` means a flat/single-pack corpus. Not part of
+    ``Rule.id`` — identity stays keyed on ``file`` so existing caches stay valid."""
 
 
 class Trigger(BaseModel):

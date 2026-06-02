@@ -17,6 +17,19 @@ from rcg.schema import Rule
 
 Severity = Literal["low", "medium", "high", "critical"]
 
+# Action classes that carry no specific subject — the extractor's catch-all for
+# rules it could not classify. Two rules sharing only such a class are NOT evidence
+# that they govern the same activity, so structural passes that key off
+# action-class equality (precedence) must not treat them as co-firing: doing so
+# turns every unclassified pair into an O(n²) pile of spurious ambiguities (the
+# dominant noise source observed at composition scale). Genuine contradictions
+# between such rules are left to the semantic (LLM-judge) pass.
+GENERIC_ACTION_CLASSES: frozenset[str] = frozenset({"agent.execute_action"})
+
+
+def is_generic_action_class(action_class: str) -> bool:
+    return action_class in GENERIC_ACTION_CLASSES
+
 
 @runtime_checkable
 class Finding(Protocol):

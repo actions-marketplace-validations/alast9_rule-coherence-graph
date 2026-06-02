@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Literal
 
-from rcg.detectors.base import Severity, scopes_overlap
+from rcg.detectors.base import Severity, is_generic_action_class, scopes_overlap
 from rcg.schema import Rule
 
 
@@ -82,7 +82,13 @@ class PrecedenceDetector:
 
     @staticmethod
     def _co_fire(a: Rule, b: Rule) -> bool:
-        return a.trigger.action_class == b.trigger.action_class and scopes_overlap(a, b)
+        if a.trigger.action_class != b.trigger.action_class:
+            return False
+        # A shared *unclassified* catch-all class is not evidence the rules govern
+        # the same action, so they don't "co-fire" for precedence purposes.
+        if is_generic_action_class(a.trigger.action_class):
+            return False
+        return scopes_overlap(a, b)
 
     @staticmethod
     def _make(a: Rule, b: Rule) -> PrecedenceAmbiguity:

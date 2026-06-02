@@ -65,3 +65,12 @@ def test_non_rules_action_class_is_medium() -> None:
     found = PrecedenceDetector().detect([a, b])
     assert len(found) == 1
     assert found[0].severity == "medium"
+
+
+def test_generic_catch_all_action_class_not_flagged() -> None:
+    # Two rules sharing only the unclassified catch-all class are not evidence of
+    # co-firing — flagging them is the O(n^2) precedence noise the guard removes.
+    a = _rule("a", "a.md", action_class="agent.execute_action")
+    b = _rule("b", "b.md", action_class="agent.execute_action")
+    found = PrecedenceDetector().detect([a, b])
+    assert found == []

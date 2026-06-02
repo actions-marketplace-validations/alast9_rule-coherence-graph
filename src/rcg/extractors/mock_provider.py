@@ -123,6 +123,7 @@ class MockProvider:
                 format=raw.source.format,
                 section=raw.source.section,
                 original_language=lang,
+                pack=raw.source.pack,
             ),
             trigger=Trigger(
                 action_class=action_class,

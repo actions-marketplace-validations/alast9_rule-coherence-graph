@@ -15,7 +15,7 @@ from typing import Any
 from rcg.detectors.syntactic import APPROVAL_STANCES
 from rcg.schema import Directive, Modality, RawRule, Rule, Source, Trigger
 
-PROMPT_VERSION = "2026-05-28.v2"
+PROMPT_VERSION = "2026-06-01.v3"
 
 TOOL_NAME = "record_rule"
 
@@ -41,8 +41,18 @@ TOOL_SCHEMA: dict[str, Any] = {
             "action_class": {
                 "type": "string",
                 "description": (
-                    "Coarse verb class the rule governs, e.g. agent.execute_action, "
-                    "db.write, deploy.production, fs.delete, rules.modify_self."
+                    "Dotted verb class naming the SPECIFIC activity the rule governs, "
+                    "as `<domain>.<verb>`. Pick the narrowest class that fits the rule's "
+                    "actual subject. Examples: deploy.production, db.write, fs.delete, "
+                    "rules.modify_self, permissions.grant, code.style, code.structure, "
+                    "code.naming, error.handling, deps.manage, testing.write, docs.write, "
+                    "logging.write, secrets.handle, vcs.commit. "
+                    "Do NOT use the catch-all 'agent.execute_action' for ordinary coding/"
+                    "style/content rules — reserve 'agent.*' for rules about the AGENT's "
+                    "own runtime behaviour (autonomy, confirmation, scope of edits). Two "
+                    "rules should share an action_class ONLY when they genuinely govern the "
+                    "same activity, because the detectors treat a shared class as grounds "
+                    "for a conflict."
                 ),
             },
             "scope_pattern": {
@@ -102,6 +112,13 @@ Modality mapping:
 - "should", "prefer", "avoid" -> SHOULD or SHOULD_NOT
 - "may", "can" -> MAY
 
+action_class granularity: choose the *narrowest* `<domain>.<verb>` class that names
+what the rule is actually about (e.g. a rule about chaining helper calls is
+`code.style`, a rule about avoiding `eval` is `secrets.handle` or `code.security`,
+a rule about writing tests is `testing.write`). The catch-all `agent.execute_action`
+is for genuine agent-runtime behaviour only — never the default for code/style/content
+rules. Over-using one class manufactures false conflicts between unrelated rules.
+
 When a rule grants or describes a permission the agent has (e.g. "agent may modify
 its rule files"), use MAY and set action_class to `rules.modify_self` or similar
 meta-class — these are flagged as critical at the detector layer.
@@ -135,6 +152,7 @@ def to_rule(raw: RawRule, payload: dict[str, Any]) -> Rule:
         format=raw.source.format,
         section=raw.source.section,
         original_language=None if lang == "en" else lang,
+        pack=raw.source.pack,
     )
     stance = payload.get("approval_stance")
     conditions = [stance] if stance in APPROVAL_STANCES else []

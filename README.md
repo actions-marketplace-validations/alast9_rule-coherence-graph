@@ -206,6 +206,7 @@ with a "require confirmation" rule.
 | `rcg ingest <path>` | Parse, extract, and load a corpus into Neo4j. |
 | `rcg check <path>` | Ingest + run the detection passes; exits non-zero if any (non-baselined) finding is found. |
 | `rcg score <path>` | Print the corpus coherence score and a by-type breakdown (always exits 0). |
+| `rcg compose <packs…>` | Measure the composition penalty ΔC between rule **packs** — conflict that exists only because packs were combined. |
 | `rcg explain "<action>" <path>` | Show which rules fire for a hypothetical action and whether they conflict. |
 | `rcg benchmark [dataset]` | Run the precision/recall benchmark for the detection passes over a labeled dataset (default `benchmarks/dataset.jsonl`). |
 
@@ -218,12 +219,40 @@ uv run rcg explain "deploy to production" examples/gemini_incident --provider mo
 ```
 
 Useful flags: `--provider auto\|anthropic\|mock`, `--no-graph` (skip Neo4j),
-`--out report.md` (write report to a file), `--semantic` (run the embedding +
-judge pass; off by default), `--no-precedence` (skip the precedence pass; on by
-default), `--min-score FLOAT` (fail only when the coherence score drops below the
-threshold instead of on any finding), `--baseline PATH` (accepted-conflicts file,
-applied only if it exists; default `rcg-baseline.json`), and `--update-baseline`
-(record the current findings as accepted and exit 0; future runs suppress them).
+`--out report.md` (write report to a file), `--json` (emit a machine-readable
+report from `check`/`score`/`compose` instead of markdown), `--concurrency N`
+(parallel extraction workers; also `RCG_EXTRACT_CONCURRENCY`), `--semantic` (run
+the embedding + judge pass; off by default), `--no-precedence` (skip the
+precedence pass; on by default), `--min-score FLOAT` (fail only when the coherence
+score drops below the threshold instead of on any finding), `--baseline PATH`
+(accepted-conflicts file, applied only if it exists; default `rcg-baseline.json`),
+and `--update-baseline` (record the current findings as accepted and exit 0;
+future runs suppress them).
+
+### Composition (`rcg compose`)
+
+`rcg compose` answers "which popular packs are dangerous to combine?". Point it at
+two or more packs (or one directory whose sub-directories are packs); it runs one
+union ingest, attributes every finding to a pack via `source.pack`, and reports
+each pack's internal coherence plus every pack pair's **cross-pack** penalty:
+
+```
+ΔC(A,B) = Σ type_weight(f) for cross-pack findings    composition_index = ΔC / (n_rules(A)+n_rules(B))
+```
+
+```bash
+# One directory of packs (each sub-dir is a pack); JSON with finding details
+rcg compose ./packs --provider anthropic --semantic --json --findings
+
+# Explicit pack list; fail CI if any pair's composition_index exceeds a threshold
+rcg compose ./safety-pack ./autonomy-pack --min-index 0.2
+```
+
+> Precision note: the precedence pass ignores pairs that share only the
+> unclassified `agent.execute_action` catch-all class, and the extractor is
+> prompted to assign specific `<domain>.<verb>` action classes — both reduce the
+> false cross-pack conflicts that a coarse class would otherwise manufacture. For
+> trustworthy ΔC, run with `--semantic` so the LLM judge confirms contradictions.
 
 ```bash
 # Run the semantic pass too, and gate CI on a minimum coherence score

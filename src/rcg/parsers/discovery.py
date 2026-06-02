@@ -40,7 +40,12 @@ def discover(root: Path, parsers: list[Parser] | None = None) -> list[RawRule]:
         for parser in parsers:
             if parser.matches(path):
                 for raw in parser.parse(path):
-                    raw.source.file = path.resolve().relative_to(base).as_posix()
+                    rel = path.resolve().relative_to(base).as_posix()
+                    raw.source.file = rel
+                    # Pack attribution: the top path segment names the pack a rule
+                    # came from (one dir per pack). A file directly under the root
+                    # belongs to no distinct pack -> None (flat/single-pack corpus).
+                    raw.source.pack = rel.split("/", 1)[0] if "/" in rel else None
                     raw_rules.append(raw)
                 break
     return raw_rules

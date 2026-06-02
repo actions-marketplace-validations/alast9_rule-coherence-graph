@@ -16,6 +16,17 @@ _BULLET = re.compile(r"^[-*]\s+(.+)$")
 _HEADING = re.compile(r"^(#+)\s+(.+)$")
 _CONTINUATION_INDENT = re.compile(r"^[ \t]+\S")
 
+# Fallback (no-bullet) recognisers. Some .cursorrules/.mdc files express rules as
+# prose paragraphs or as quoted items inside a `name = [ "...", "..." ]` list
+# literal rather than markdown bullets; without a fallback those parse to zero
+# rules. These fire ONLY when a file contains no top-level bullets, so bullet
+# files are completely unaffected.
+_LIST_OPEN = re.compile(r"^\s*[A-Za-z_]\w*\s*=\s*\[")
+_TRIPLE_QUOTE = re.compile(r'"""|\'\'\'')
+_QUOTED = re.compile(r"""(?:"([^"]+)"|'([^']+)')""")
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_CODEY = re.compile(r"^\s*[\]\}\)]|^\s*[A-Za-z_]\w*\s*=\s*[\"'\[{]?\s*$")
+
 
 def has_markdown_bullets(lines: list[str]) -> bool:
     """Return True if any line is a markdown bullet (`- ` / `* `) at column 0."""
@@ -76,6 +87,74 @@ def extract_markdown_rules(
             )
         )
         i = j
+
+    if rules:
+        return rules
+    # No bullets found anywhere: fall back to prose + list-literal extraction so
+    # bullet-less rule files (common in older .cursorrules/.mdc) still yield rules.
+    return _extract_fallback_rules(
+        lines, file=file, fmt=fmt, line_offset=line_offset, default_section=default_section
+    )
+
+
+def _extract_fallback_rules(
+    lines: list[str],
+    *,
+    file: str,
+    fmt: str,
+    line_offset: int,
+    default_section: str | None,
+) -> list[RawRule]:
+    """Extract rules from a bullet-less body: quoted items in `name = [...]` list
+    literals, and otherwise prose split into sentences. Triple-quoted blocks (e.g.
+    a folder-structure dump) are skipped — they are illustrative, not rules."""
+    rules: list[RawRule] = []
+    section: str | None = default_section
+    in_list = False
+    in_triple = False
+
+    def add(text: str, line_idx: int) -> None:
+        text = text.strip()
+        if len(text.split()) < 2:  # drop fragments / single tokens
+            return
+        ln = line_idx + 1 + line_offset
+        rules.append(
+            RawRule(
+                text=text,
+                source=Source(
+                    file=file, line_start=ln, line_end=ln, format=fmt, section=section
+                ),
+            )
+        )
+
+    for idx, line in enumerate(lines):
+        if in_triple:
+            if _TRIPLE_QUOTE.search(line):
+                in_triple = False
+            continue
+        heading = _HEADING.match(line)
+        if heading:
+            section = heading.group(2).strip()
+            in_list = False
+            continue
+        if not in_list and _TRIPLE_QUOTE.search(line):
+            # opening triple-quote with no closing one on the same line
+            if len(_TRIPLE_QUOTE.findall(line)) % 2 == 1:
+                in_triple = True
+            continue
+        if _LIST_OPEN.match(line):
+            in_list = True
+        if in_list:
+            for m in _QUOTED.finditer(line):
+                add(m.group(1) or m.group(2), idx)
+            if "]" in line:
+                in_list = False
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", "//")) or _CODEY.match(line):
+            continue
+        for sentence in _SENTENCE_SPLIT.split(stripped):
+            add(sentence, idx)
 
     return rules
 

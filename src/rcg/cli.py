@@ -10,6 +10,7 @@ from typing import Annotated
 import typer
 
 from rcg.baseline import load_baseline, split_baselined, write_baseline
+from rcg.compose import compose as compose_corpus
 from rcg.detectors.base import Finding
 from rcg.detectors.precedence import PrecedenceDetector
 from rcg.detectors.semantic import (
@@ -26,6 +27,7 @@ from rcg.extractors.mock_provider import MockProvider
 from rcg.parsers.discovery import discover
 from rcg.providers.embedding import EmbeddingProvider, HashingEmbeddingProvider
 from rcg.providers.llm import LLMProvider
+from rcg.reports.json_report import render_json
 from rcg.reports.markdown import render_report
 from rcg.schema import Rule
 from rcg.scoring import score_corpus
@@ -498,7 +500,13 @@ def _build_embedder(kind: str) -> EmbeddingProvider:
 
 
 def _ingest(
-    path: Path, provider_name: str, write_graph: bool, uri: str, user: str, pw: str
+    path: Path,
+    provider_name: str,
+    write_graph: bool,
+    uri: str,
+    user: str,
+    pw: str,
+    concurrency: int | None = None,
 ) -> list[Rule]:
     raws = discover(path)
     if not raws:
@@ -506,7 +514,7 @@ def _ingest(
         raise typer.Exit(code=1)
 
     provider = _build_provider(provider_name)
-    rules = extract_all(raws, provider)
+    rules = extract_all(raws, provider, concurrency=concurrency)
 
     if write_graph:
         from rcg.graph.loader import GraphLoader  # lazy import: neo4j optional at runtime
@@ -573,6 +581,12 @@ def check(
     neo4j_password: NEO4J_PASS = "rcgdevpassword",
     no_graph: bool = typer.Option(False, "--no-graph", help="Skip Neo4j read/write."),
     out: Path | None = typer.Option(None, "--out", help="Write report to file instead of stdout."),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit a machine-readable JSON report instead of markdown."
+    ),
+    concurrency: int | None = typer.Option(
+        None, "--concurrency", help="Parallel extraction workers (env RCG_EXTRACT_CONCURRENCY)."
+    ),
     semantic: bool = typer.Option(
         False, "--semantic/--no-semantic", help="Run the semantic (judge) pass."
     ),
@@ -599,6 +613,7 @@ def check(
         uri=neo4j_uri,
         user=neo4j_user,
         pw=neo4j_password,
+        concurrency=concurrency,
     )
 
     findings = _run_passes(
@@ -624,7 +639,10 @@ def check(
         with GraphLoader.connect(neo4j_uri, neo4j_user, neo4j_password) as loader:
             loader.load_conflicts(kept)
 
-    report = render_report(kept, score=score, suppressed=len(suppressed))
+    if as_json:
+        report = render_json(kept, score=score, suppressed=len(suppressed))
+    else:
+        report = render_report(kept, score=score, suppressed=len(suppressed))
     if out:
         out.write_text(report, encoding="utf-8")
         typer.echo(f"Wrote report to {out}", err=True)
@@ -699,6 +717,12 @@ def score(
     precedence: bool = typer.Option(
         True, "--precedence/--no-precedence", help="Run the precedence pass."
     ),
+    as_json: bool = typer.Option(
+        False, "--json", help="Emit the score breakdown as JSON."
+    ),
+    concurrency: int | None = typer.Option(
+        None, "--concurrency", help="Parallel extraction workers (env RCG_EXTRACT_CONCURRENCY)."
+    ),
 ) -> None:
     """Print the corpus coherence score and breakdown (always exits 0)."""
     rules = _ingest(
@@ -708,11 +732,27 @@ def score(
         uri=neo4j_uri,
         user=neo4j_user,
         pw=neo4j_password,
+        concurrency=concurrency,
     )
     findings = _run_passes(
         rules, provider_name=provider, semantic=semantic, precedence=precedence
     )
     report = score_corpus(len(rules), findings)
+    if as_json:
+        import json as _json
+
+        typer.echo(
+            _json.dumps(
+                {
+                    "score": round(report.score, 4),
+                    "n_rules": report.n_rules,
+                    "weighted_penalty": round(report.weighted, 4),
+                    "by_type": report.by_type,
+                },
+                indent=2,
+            )
+        )
+        return
     typer.echo(f"Coherence score: {report.score:.3f}")
     typer.echo(f"Rules: {report.n_rules}")
     typer.echo(f"Weighted penalty: {report.weighted:.3f}")
@@ -761,6 +801,126 @@ def benchmark(
     if out is not None:
         out.write_text(markdown + "\n", encoding="utf-8")
         typer.echo(f"Wrote benchmark table to {out}", err=True)
+
+
+def _resolve_pack_paths(paths: list[Path]) -> list[Path]:
+    """Resolve the pack list. A single directory argument is expanded to its
+    immediate sub-directories (one dir per pack); otherwise each path is a pack."""
+    if len(paths) == 1 and paths[0].is_dir():
+        subdirs = sorted(
+            p for p in paths[0].iterdir() if p.is_dir() and not p.name.startswith(".")
+        )
+        if len(subdirs) >= 2:
+            return subdirs
+    return paths
+
+
+def _ingest_packs(
+    pack_paths: list[Path], provider_name: str, concurrency: int | None
+) -> list[Rule]:
+    """Ingest each pack, namespacing source.file by pack name so identities and
+    the precedence 'same-file' check stay correct across packs, and labelling
+    source.pack authoritatively (cache-proof, since pack is not in the cache key)."""
+    provider = _build_provider(provider_name)
+    all_rules: list[Rule] = []
+    for pp in pack_paths:
+        raws = discover(pp)
+        if not raws:
+            typer.echo(f"No rule files discovered under {pp}", err=True)
+            continue
+        for raw in raws:
+            raw.source.file = f"{pp.name}/{raw.source.file}"
+            raw.source.pack = pp.name
+        rules = extract_all(raws, provider, concurrency=concurrency)
+        for rule in rules:  # cache may predate the pack field -> set it explicitly
+            rule.source.pack = pp.name
+        all_rules.extend(rules)
+    return all_rules
+
+
+@app.command()
+def compose(
+    paths: list[Path] = typer.Argument(
+        ..., exists=True, help="Two or more pack paths, or one directory of packs."
+    ),
+    provider: PROVIDER_OPT = "auto",
+    semantic: bool = typer.Option(
+        False, "--semantic/--no-semantic", help="Run the semantic (judge) pass."
+    ),
+    precedence: bool = typer.Option(
+        True, "--precedence/--no-precedence", help="Run the precedence pass."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit the full composition report as JSON."),
+    findings_in_json: bool = typer.Option(
+        False, "--findings", help="Include cross-pack finding details in the JSON."
+    ),
+    concurrency: int | None = typer.Option(
+        None, "--concurrency", help="Parallel extraction workers (env RCG_EXTRACT_CONCURRENCY)."
+    ),
+    out: Path | None = typer.Option(None, "--out", help="Write the report to a file."),
+    min_index: float | None = typer.Option(
+        None, "--min-index", help="Exit 1 if any pair's composition_index exceeds this."
+    ),
+) -> None:
+    """Measure the composition penalty ΔC between rule packs.
+
+    Runs one union ingest over all packs and reports each pack's internal
+    coherence plus every pack pair's cross-pack conflict (ΔC) — the conflict that
+    exists only because the packs were combined.
+    """
+    pack_paths = _resolve_pack_paths(paths)
+    if len(pack_paths) < 2:
+        typer.echo("error: compose needs at least 2 packs (or one directory of packs).", err=True)
+        raise typer.Exit(code=2)
+
+    rules = _ingest_packs(pack_paths, provider, concurrency)
+    if not rules:
+        typer.echo("No rules extracted from the given packs.", err=True)
+        raise typer.Exit(code=1)
+    findings = _run_passes(rules, provider_name=provider, semantic=semantic, precedence=precedence)
+    report = compose_corpus(rules, findings)
+
+    if as_json:
+        import json as _json
+
+        text = _json.dumps(report.to_dict(include_findings=findings_in_json), indent=2)
+    else:
+        text = _render_composition(report)
+    if out:
+        out.write_text(text, encoding="utf-8")
+        typer.echo(f"Wrote composition report to {out}", err=True)
+    else:
+        typer.echo(text)
+
+    if min_index is not None and any(c.composition_index > min_index for c in report.pairs):
+        raise typer.Exit(code=1)
+
+
+def _render_composition(report) -> str:  # type: ignore[no-untyped-def]
+    lines = [
+        "# RCG composition report",
+        "",
+        f"packs={len(report.packs)} rules={report.n_rules} "
+        f"findings={report.n_findings} cross-pack={report.n_cross_pack}",
+        "",
+        "## Internal coherence (per pack)",
+        "",
+    ]
+    for p in sorted(report.per_pack, key=lambda p: report.per_pack[p].internal.score):
+        c = report.per_pack[p]
+        lines.append(
+            f"- {p}: score={c.internal.score:.3f}  rules={c.n_rules}  "
+            f"internal_findings={sum(c.internal.by_type.values())}"
+        )
+    lines += ["", "## Composition penalty ΔC (pack pairs, worst first)", ""]
+    if not report.pairs:
+        lines.append("- none (no cross-pack findings)")
+    for c in report.pairs:
+        lines.append(
+            f"- {' + '.join(c.packs)}: ΔC={c.delta_c:.1f} "
+            f"({c.cross_count} cross) index={c.composition_index:.4f}"
+        )
+    return "\n".join(lines) + "\n"
 
 
 if __name__ == "__main__":
