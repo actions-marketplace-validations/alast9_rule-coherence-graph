@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
@@ -31,6 +31,11 @@ from rcg.reports.json_report import render_json
 from rcg.reports.markdown import render_report
 from rcg.schema import Rule
 from rcg.scoring import score_corpus
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from rcg.graph.loader import GraphLoader
 
 app = typer.Typer(add_completion=False, help="Rule Coherence Graph (RCG).")
 
@@ -499,6 +504,44 @@ def _build_embedder(kind: str) -> EmbeddingProvider:
     raise typer.BadParameter(f"unknown embedder: {kind!r}")
 
 
+# URIs we've already warned about being unreachable, so a single `check` run
+# (which writes rules and then conflicts) emits one warning, not one per write.
+_GRAPH_WARNED: set[str] = set()
+
+
+def _try_write_graph(
+    uri: str,
+    user: str,
+    pw: str,
+    write_fn: Callable[[GraphLoader], None],
+) -> bool:
+    """Run a Neo4j write, degrading gracefully when the server is unreachable.
+
+    Connect, run ``write_fn(loader)``, and return ``True`` on success. If Neo4j
+    can't be reached (e.g. it isn't running), print a one-line warning (once per
+    URI) and return ``False`` instead of crashing — so analysis works with zero
+    setup. Pass ``--no-graph`` to skip the write (and this warning) entirely.
+    """
+    from neo4j.exceptions import ServiceUnavailable
+
+    from rcg.graph.loader import GraphLoader  # lazy import: neo4j optional at runtime
+
+    try:
+        with GraphLoader.connect(uri, user, pw) as loader:
+            write_fn(loader)
+        return True
+    except (ServiceUnavailable, OSError) as exc:
+        if uri not in _GRAPH_WARNED:
+            _GRAPH_WARNED.add(uri)
+            typer.echo(
+                f"warning: could not reach Neo4j at {uri}; skipping graph persistence "
+                f"({type(exc).__name__}). Pass --no-graph to silence this, or start "
+                "Neo4j (docker compose up -d neo4j) to persist the rule graph.",
+                err=True,
+            )
+        return False
+
+
 def _ingest(
     path: Path,
     provider_name: str,
@@ -517,10 +560,7 @@ def _ingest(
     rules = extract_all(raws, provider, concurrency=concurrency)
 
     if write_graph:
-        from rcg.graph.loader import GraphLoader  # lazy import: neo4j optional at runtime
-
-        with GraphLoader.connect(uri, user, pw) as loader:
-            loader.load_rules(rules)
+        _try_write_graph(uri, user, pw, lambda loader: loader.load_rules(rules))
 
     typer.echo(f"Ingested {len(rules)} rule(s) from {path}.", err=True)
     return rules
@@ -634,10 +674,12 @@ def check(
     score = score_corpus(len(rules), kept)
 
     if not no_graph and kept:
-        from rcg.graph.loader import GraphLoader
-
-        with GraphLoader.connect(neo4j_uri, neo4j_user, neo4j_password) as loader:
-            loader.load_conflicts(kept)
+        _try_write_graph(
+            neo4j_uri,
+            neo4j_user,
+            neo4j_password,
+            lambda loader: loader.load_conflicts(kept),
+        )
 
     if as_json:
         report = render_json(kept, score=score, suppressed=len(suppressed))

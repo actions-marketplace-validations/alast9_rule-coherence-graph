@@ -41,9 +41,11 @@ uvx --from rule-coherence-graph rcg check examples/gemini_incident
 ```
 
 With no `ANTHROPIC_API_KEY` set, `check` falls back to the offline heuristic
-extractor (with a warning) so the demo runs anywhere. On the bundled example it
-reports a **coherence score of 0.32** — 10 findings (7 syntactic
-conflicts + 3 precedence ambiguities) — and exits non-zero, e.g.:
+extractor (with a warning); and if Neo4j isn't running it warns and skips the
+graph rather than failing — so the demo runs anywhere with zero setup. On the
+bundled example the offline extractor reports a **coherence score of 0.883** —
+2 findings (1 syntactic conflict + 1 precedence ambiguity) — and exits non-zero,
+e.g.:
 
 ```
 ## 1. CRITICAL — syntactic
@@ -56,11 +58,16 @@ Rule B (CLAUDE.md:7) [MUST_NOT rules.modify_self]
 > Rule files under `.agent/rules/` are read-only; agents MUST NOT modify them.
 ```
 
-For real (LLM-backed) extraction:
+The offline heuristic is intentionally lossy: it pairs only rules it labels with
+the same `action_class`, so it surfaces this clear `rules.modify_self`
+contradiction but misses subtler clashes between differently-worded rules — the
+auto-deploy / never-prompt directives vs the require-confirmation rules
+(including the smuggled Vietnamese rule). The LLM extractor normalizes related
+rules to a shared action class and catches more of them:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-...
-uv run rcg check examples/gemini_incident --provider anthropic --no-graph
+uv run rcg check examples/gemini_incident --provider anthropic
 ```
 
 To load the graph into Neo4j as well, drop `--no-graph` and start the DB:

@@ -91,6 +91,44 @@ def test_check_with_baseline_suppresses(tmp_path: Path) -> None:
     assert "No conflicts detected" in result.output
 
 
+# A port nothing listens on, so the Neo4j connect is refused deterministically
+# whether or not a real server is up on the default 7687.
+_DEAD_NEO4J = "bolt://127.0.0.1:9"
+
+
+def test_check_degrades_gracefully_when_neo4j_unreachable() -> None:
+    """`check` without --no-graph must warn-and-continue, not crash, when Neo4j
+    is unreachable -- so the demo runs anywhere with zero setup."""
+    from rcg import cli
+
+    cli._GRAPH_WARNED.discard(_DEAD_NEO4J)
+    result = runner.invoke(
+        app,
+        ["check", str(EXAMPLE), "--provider", "mock", "--neo4j-uri", _DEAD_NEO4J],
+    )
+    assert result.exit_code == 1  # syntactic conflict still drives non-zero exit
+    # Exit is a clean SystemExit(1) from the findings gate, not a crash: the report
+    # rendered and no connection traceback leaked.
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.output
+    assert "Coherence score:" in result.output
+    assert "could not reach Neo4j" in result.output
+
+
+def test_score_degrades_gracefully_when_neo4j_unreachable() -> None:
+    from rcg import cli
+
+    cli._GRAPH_WARNED.discard(_DEAD_NEO4J)
+    result = runner.invoke(
+        app,
+        ["score", str(EXAMPLE), "--provider", "mock", "--neo4j-uri", _DEAD_NEO4J],
+    )
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert "Coherence score:" in result.output
+    assert "could not reach Neo4j" in result.output
+
+
 def test_check_semantic_runs_and_reports() -> None:
     # The corpus has syntactic conflicts, so check exits non-zero. The semantic
     # pass runs without error; on this corpus the lexical HashingEmbeddingProvider
