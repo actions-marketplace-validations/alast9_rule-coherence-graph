@@ -12,7 +12,14 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Literal
 
-from rcg.detectors.base import Severity, is_generic_action_class, scopes_overlap
+from rcg.detectors.base import (
+    HUB_FRACTION,
+    HUB_MIN_RULES,
+    Severity,
+    hub_action_classes,
+    is_generic_action_class,
+    scopes_overlap,
+)
 from rcg.schema import Rule
 
 
@@ -28,7 +35,22 @@ class PrecedenceAmbiguity:
 
 
 class PrecedenceDetector:
-    """Flags cross-file co-firing rule pairs whose ordering is unresolved."""
+    """Flags cross-file co-firing rule pairs whose ordering is unresolved.
+
+    ``hub_min_rules`` / ``hub_fraction`` parameterise the corpus-relative hub-class
+    guard (see :func:`rcg.detectors.base.hub_action_classes`): precedence is not
+    raised for pairs whose shared action class is a dominant generic bucket, since
+    that reflects coarse labelling rather than genuine co-governance. Set
+    ``hub_fraction`` above 1.0 to disable the guard.
+    """
+
+    def __init__(
+        self,
+        hub_min_rules: int = HUB_MIN_RULES,
+        hub_fraction: float = HUB_FRACTION,
+    ) -> None:
+        self.hub_min_rules = hub_min_rules
+        self.hub_fraction = hub_fraction
 
     def detect(
         self,
@@ -37,6 +59,9 @@ class PrecedenceDetector:
     ) -> list[PrecedenceAmbiguity]:
         exclude = exclude or set()
         graph = self._build_graph(rules)
+        hubs = hub_action_classes(
+            rules, min_rules=self.hub_min_rules, fraction=self.hub_fraction
+        )
         ambiguities: list[PrecedenceAmbiguity] = []
         n = len(rules)
         for i in range(n):
@@ -46,7 +71,7 @@ class PrecedenceDetector:
                     continue
                 if frozenset({a.id, b.id}) in exclude:
                     continue
-                if not self._co_fire(a, b):
+                if not self._co_fire(a, b, hubs):
                     continue
                 if self._reachable(graph, a.id, b.id) or self._reachable(graph, b.id, a.id):
                     continue
@@ -81,12 +106,19 @@ class PrecedenceDetector:
         return False
 
     @staticmethod
-    def _co_fire(a: Rule, b: Rule) -> bool:
+    def _co_fire(a: Rule, b: Rule, hubs: frozenset[str]) -> bool:
         if a.trigger.action_class != b.trigger.action_class:
             return False
         # A shared *unclassified* catch-all class is not evidence the rules govern
         # the same action, so they don't "co-fire" for precedence purposes.
         if is_generic_action_class(a.trigger.action_class):
+            return False
+        # Nor is a shared *hub* class — one a large share of the corpus carries
+        # (e.g. ``code.style``). Pairing every cross-pack rule that merely touches
+        # the same broad area is the dominant O(n^2) precedence-noise source and
+        # makes the count swing with how concentrated an extractor's labels are.
+        # Defer such pairs to the semantic (LLM-judge) pass.
+        if a.trigger.action_class in hubs:
             return False
         return scopes_overlap(a, b)
 
